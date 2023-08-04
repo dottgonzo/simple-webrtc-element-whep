@@ -1,0 +1,40 @@
+{
+  "name": "simple-webrtc-element-whep",
+  "version": "0.0.1",
+  "description": "Simple Webrtc Html Video Element Manager",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha",
+    "build": "tsc",
+    "prettier": "prettier --write \"src/**/*.ts\"",
+    "watch-ts": "tsc -w",
+    "release:patch": "npm run build && npm version patch && git push && git push --tags && npm publish",
+    "release:minor": "npm run build && npm version minor && git push && git push --tags && npm publish",
+    "release:major": "npm run build && npm version major && git push && git push --tags && npm publish"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dottgonzo/simple-webrtc-element-whep.git"
+  },
+  "keywords": [
+    "webrtc",
+    "video",
+    "media"
+  ],
+  "author": "Dario Caruso",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/dottgonzo/simple-webrtc-element-whep/issues"
+  },
+  "homepage": "https://github.com/dottgonzo/simple-webrtc-element-whep#readme",
+  "devDependencies": {
+    "prettier": "^2.8.2",
+    "prettier-plugin-organize-imports": "^3.2.3",
+    "typescript": "^5.1.6"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "browser": "*"
+  },
+  "type": "module"
+}
