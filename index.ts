@@ -110,7 +110,7 @@ export default class WHEPClient {
   start() {
     console.log("requesting ICE servers");
 
-    fetch(new URL('whep', window.location.href) + window.location.search, {
+    fetch(this.whepUri, {
       method: 'OPTIONS',
     })
       .then((res) => this.onIceServers(res))
@@ -134,7 +134,7 @@ export default class WHEPClient {
 
     this.pc.ontrack = (evt) => {
       console.log("new track:", evt.track.kind);
-      (document.getElementById("video") as HTMLVideoElement).srcObject = evt.streams[0];
+      this.videoElement.srcObject = evt.streams[0];
     };
 
     this.pc.createOffer()
@@ -221,7 +221,7 @@ export default class WHEPClient {
 
   sendLocalCandidates(candidates: RTCIceCandidate[]) {
     if (!this.offerData) throw new Error('offerData is null')
-    fetch(new URL('whep', window.location.href) + window.location.search, {
+    fetch(this.whepUri, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/trickle-ice-sdpfrag',
@@ -250,7 +250,7 @@ export default class WHEPClient {
       this.pc = null;
     }
 
-    this.restartTimeout = window.setTimeout(() => {
+    this.restartTimeout = setTimeout(() => {
       this.restartTimeout = null;
       this.start();
     }, this.restartPause);
