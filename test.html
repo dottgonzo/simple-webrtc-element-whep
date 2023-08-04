@@ -9,11 +9,21 @@
 <body>
     <h1>Test</h1>
     <p>Test</p>
-    <video></video>
+    <video muted controls autoplay playsinline></video>
     <script type="module">
-        const video = document.querySelector('video');
         import WhepClient from './index.js';
-        console.log(WhepClient);
+
+        const onOnline = () => {
+            console.log('online');
+        }
+        const onOffline = () => {
+            console.log('offline');
+        }
+        const video = document.querySelector('video');
+        const client = new WhepClient({
+            videoElement: video, whepUri: 'http://65.21.110.241:8998/fakeh264flux/whep', onOnline, onOffline,
+        });
+        console.log(client);
 
     </script>
 </body>
