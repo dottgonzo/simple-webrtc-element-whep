@@ -92,7 +92,7 @@ export default class WHEPClient {
   whepUri: string
   pc: RTCPeerConnection | null = null
   restartTimeout: number | null = null
-  eTag: string | null = '';
+  eTag = '';
   queuedCandidates: RTCIceCandidate[] = [];
   offerData: TOfferData | null = null
   onOnline: () => void
@@ -163,7 +163,7 @@ export default class WHEPClient {
         if (res.status !== 201) {
           throw new Error('bad status code');
         }
-        this.eTag = res.headers.get('E-Tag');
+        this.eTag = res.headers.get('E-Tag') || '';
         return res.text();
       })
       .then((sdp) => this.onRemoteAnswer(new RTCSessionDescription({
