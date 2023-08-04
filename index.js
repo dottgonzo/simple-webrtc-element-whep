@@ -141,7 +141,12 @@ export default class WHEPClient {
         console.log("peer connection state:", this.pc.iceConnectionState);
         switch (this.pc.iceConnectionState) {
             case "disconnected":
+                this.onOffline();
                 this.scheduleRestart();
+                break;
+            case "connected":
+                this.onOnline();
+                break;
         }
     }
     onRemoteAnswer(answer) {

@@ -187,7 +187,13 @@ export default class WHEPClient {
 
     switch (this.pc.iceConnectionState) {
       case "disconnected":
+        this.onOffline();
         this.scheduleRestart();
+        break;
+      case "connected":
+        this.onOnline();
+        break;
+
     }
   }
 
