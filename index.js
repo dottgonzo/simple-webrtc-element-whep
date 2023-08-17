@@ -1,23 +1,25 @@
-const linkToIceServers = (links) => ((links !== null) ? links.split(', ').map((link) => {
-    const m = link.match(/^<(.+?)>; rel="ice-server"(; username="(.*?)"; credential="(.*?)"; credential-type="password")?/i);
-    if (m === null) {
-        throw new Error('invalid Link header');
-    }
-    const ret = {
-        urls: [m[1]],
-    };
-    if (m[3] !== undefined) {
-        ret.username = JSON.parse(`"${m[3]}"`);
-        ret.credential = JSON.parse(`"${m[4]}"`);
-        ret.credentialType = "password";
-    }
-    return ret;
-}) : []);
+const linkToIceServers = (links) => links !== null
+    ? links.split(', ').map(link => {
+        const m = link.match(/^<(.+?)>; rel="ice-server"(; username="(.*?)"; credential="(.*?)"; credential-type="password")?/i);
+        if (m === null) {
+            throw new Error('invalid Link header');
+        }
+        const ret = {
+            urls: [m[1]]
+        };
+        if (m[3] !== undefined) {
+            ret.username = JSON.parse(`"${m[3]}"`);
+            ret.credential = JSON.parse(`"${m[4]}"`);
+            ret.credentialType = 'password';
+        }
+        return ret;
+    })
+    : [];
 const parseOffer = (offer) => {
     const ret = {
         iceUfrag: '',
         icePwd: '',
-        medias: [],
+        medias: []
     };
     for (const line of offer.split('\r\n')) {
         if (line.startsWith('m=')) {
@@ -41,13 +43,11 @@ const generateSdpFragment = (offerData, candidates) => {
         }
         candidatesByMedia[mid].push(candidate);
     }
-    let frag = 'a=ice-ufrag:' + offerData.iceUfrag + '\r\n'
-        + 'a=ice-pwd:' + offerData.icePwd + '\r\n';
+    let frag = 'a=ice-ufrag:' + offerData.iceUfrag + '\r\n' + 'a=ice-pwd:' + offerData.icePwd + '\r\n';
     let mid = 0;
     for (const media of offerData.medias) {
         if (candidatesByMedia[mid] !== undefined) {
-            frag += 'm=' + media + '\r\n'
-                + 'a=mid:' + mid + '\r\n';
+            frag += 'm=' + media + '\r\n' + 'a=mid:' + mid + '\r\n';
             for (const candidate of candidatesByMedia[mid]) {
                 frag += 'a=' + candidate.candidate + '\r\n';
             }
@@ -58,6 +58,7 @@ const generateSdpFragment = (offerData, candidates) => {
 };
 export default class WHEPClient {
     constructor(options) {
+        this.additionalsHeaders = {};
         this.restartPause = 2000;
         this.pc = null;
         this.restartTimeout = null;
@@ -73,33 +74,37 @@ export default class WHEPClient {
         this.onOnline = options.onOnline;
         this.onOffline = options.onOffline;
         this.start();
+        if (options.additionalsHeaders &&
+            typeof options.additionalsHeaders === 'object' &&
+            Object.keys(options.additionalsHeaders)?.length)
+            this.additionalsHeaders = options.additionalsHeaders;
     }
     start() {
-        console.log("requesting ICE servers");
+        console.log('requesting ICE servers');
         fetch(this.whepUri, {
             method: 'OPTIONS',
+            headers: this.additionalsHeaders
         })
-            .then((res) => this.onIceServers(res))
-            .catch((err) => {
+            .then(res => this.onIceServers(res))
+            .catch(err => {
             console.log('error: ' + err);
             this.scheduleRestart();
         });
     }
     onIceServers(res) {
         this.pc = new RTCPeerConnection({
-            iceServers: linkToIceServers(res.headers.get('Link')),
+            iceServers: linkToIceServers(res.headers.get('Link'))
         });
-        const direction = "sendrecv";
-        this.pc.addTransceiver("video", { direction });
-        this.pc.addTransceiver("audio", { direction });
-        this.pc.onicecandidate = (evt) => this.onLocalCandidate(evt);
+        const direction = 'sendrecv';
+        this.pc.addTransceiver('video', { direction });
+        this.pc.addTransceiver('audio', { direction });
+        this.pc.onicecandidate = evt => this.onLocalCandidate(evt);
         this.pc.oniceconnectionstatechange = () => this.onConnectionState();
-        this.pc.ontrack = (evt) => {
-            console.log("new track:", evt.track.kind);
+        this.pc.ontrack = evt => {
+            console.log('new track:', evt.track.kind);
             this.videoElement.srcObject = evt.streams[0];
         };
-        this.pc.createOffer()
-            .then((offer) => this.onLocalOffer(offer));
+        this.pc.createOffer().then(offer => this.onLocalOffer(offer));
     }
     onLocalOffer(offer) {
         if (!this.pc)
@@ -108,26 +113,26 @@ export default class WHEPClient {
             throw new Error('offer.sdp is null');
         this.offerData = parseOffer(offer.sdp);
         this.pc.setLocalDescription(offer);
-        console.log("sending offer");
+        console.log('sending offer');
         fetch(this.whepUri, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/sdp',
-            },
-            body: offer.sdp,
+            headers: Object.assign(this.additionalsHeaders, {
+                'Content-Type': 'application/sdp'
+            }),
+            body: offer.sdp
         })
-            .then((res) => {
+            .then(res => {
             if (res.status !== 201) {
                 throw new Error('bad status code');
             }
             this.eTag = res.headers.get('E-Tag') || '';
             return res.text();
         })
-            .then((sdp) => this.onRemoteAnswer(new RTCSessionDescription({
+            .then(sdp => this.onRemoteAnswer(new RTCSessionDescription({
             type: 'answer',
-            sdp,
+            sdp
         })))
-            .catch((err) => {
+            .catch(err => {
             console.log('error: ' + err);
             this.scheduleRestart();
         });
@@ -138,13 +143,13 @@ export default class WHEPClient {
         }
         if (!this.pc)
             throw new Error('pc is null');
-        console.log("peer connection state:", this.pc.iceConnectionState);
+        console.log('peer connection state:', this.pc.iceConnectionState);
         switch (this.pc.iceConnectionState) {
-            case "disconnected":
+            case 'disconnected':
                 this.onOffline();
                 this.scheduleRestart();
                 break;
-            case "connected":
+            case 'connected':
                 this.onOnline();
                 break;
         }
@@ -179,18 +184,18 @@ export default class WHEPClient {
             throw new Error('offerData is null');
         fetch(this.whepUri, {
             method: 'PATCH',
-            headers: {
+            headers: Object.assign(this.additionalsHeaders, {
                 'Content-Type': 'application/trickle-ice-sdpfrag',
-                'If-Match': this.eTag || '',
-            },
-            body: generateSdpFragment(this.offerData, candidates),
+                'If-Match': this.eTag || ''
+            }),
+            body: generateSdpFragment(this.offerData, candidates)
         })
-            .then((res) => {
+            .then(res => {
             if (res.status !== 204) {
                 throw new Error('bad status code');
             }
         })
-            .catch((err) => {
+            .catch(err => {
             console.log('error: ' + err);
             this.scheduleRestart();
         });
