@@ -21,9 +21,11 @@ export default class WHEPClient {
   onOnline: () => void
   onOffline: () => void
   online = false
+  whepUri: string
   constructor(
     video: HTMLVideoElement,
     options: {
+      whepUri: string
       controls?: boolean
       muted?: boolean
       autoplay?: boolean
@@ -34,10 +36,12 @@ export default class WHEPClient {
   ) {
     this.video = video
 
+    this.whepUri = options.whepUri
     if (options.controls !== false) this.video.controls = true
     if (options.muted !== false) this.video.muted = true
     if (options.autoplay !== true) this.video.autoplay = true
     if (options.playsInline !== true) this.video.playsInline = true
+
     this.defaultControls = this.video.controls
 
     this.onOnline =
@@ -348,7 +352,7 @@ export default class WHEPClient {
         this.pc = null
       }
 
-      this.restartTimeout = window.setTimeout(() => {
+      this.restartTimeout = setTimeout(() => {
         this.restartTimeout = null
         this.loadStream()
       }, this.retryPause)
@@ -365,7 +369,7 @@ export default class WHEPClient {
   }
 
   sendLocalCandidates(candidates: any) {
-    fetch(this.sessionUrl + window.location.search, {
+    fetch(this.sessionUrl, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/trickle-ice-sdpfrag',
@@ -426,7 +430,7 @@ export default class WHEPClient {
   }
 
   sendOffer(offer: any) {
-    fetch(new URL('whep', window.location.href) + window.location.search, {
+    fetch(this.whepUri, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/sdp'
@@ -446,11 +450,8 @@ export default class WHEPClient {
           default:
             throw new Error(`bad status code ${res.status}`)
         }
-        const loc = res.headers.get('location')
-        if (loc) {
-          this.sessionUrl = new URL(loc, window.location.href).toString()
-        }
-
+        this.sessionUrl = new URL(res.headers.get('location') as string, this.whepUri.replace('/whep', '/')).toString()
+        console.log('session', this.sessionUrl)
         return res.text().then(sdp => this.onRemoteAnswer(sdp))
       })
       .catch(err => {
@@ -498,7 +499,7 @@ export default class WHEPClient {
   }
 
   requestICEServers = () => {
-    fetch(new URL('whep', window.location.href) + window.location.search, {
+    fetch(this.whepUri, {
       method: 'OPTIONS'
     })
       .then(res => {

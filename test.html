@@ -20,8 +20,8 @@
             console.log('offline');
         }
         const video = document.querySelector('video');
-        const client = new WhepClient({
-            videoElement: video, whepUri: 'http://192.168.1.9/wrtc/test/whep', onOnline, onOffline,
+        const client = new WhepClient(video, {
+            whepUri: 'https://vpn0.devicesmng.kernel.online/slave_10.33.88.212_fakeh264flux2/whep', onOnline, onOffline,
         });
         console.log(client);
 
