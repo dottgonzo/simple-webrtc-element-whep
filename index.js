@@ -1,5 +1,5 @@
 export default class WHEPClient {
-    constructor(video, options) {
+    constructor(options) {
         this.retryPause = 2000;
         this.nonAdvertisedCodecs = [];
         this.pc = null;
@@ -314,7 +314,7 @@ export default class WHEPClient {
         this.init = () => {
             this.getNonAdvertisedCodecs();
         };
-        this.video = video;
+        this.video = options.videoElement;
         this.whepUri = options.whepUri;
         if (options.controls !== false)
             this.video.controls = true;

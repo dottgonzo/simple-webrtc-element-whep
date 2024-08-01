@@ -22,19 +22,17 @@ export default class WHEPClient {
   onOffline: () => void
   online = false
   whepUri: string
-  constructor(
-    video: HTMLVideoElement,
-    options: {
-      whepUri: string
-      controls?: boolean
-      muted?: boolean
-      autoplay?: boolean
-      playsInline?: boolean
-      onOnline?: () => void
-      onOffline?: () => void
-    }
-  ) {
-    this.video = video
+  constructor(options: {
+    videoElement: HTMLVideoElement
+    whepUri: string
+    controls?: boolean
+    muted?: boolean
+    autoplay?: boolean
+    playsInline?: boolean
+    onOnline?: () => void
+    onOffline?: () => void
+  }) {
+    this.video = options.videoElement
 
     this.whepUri = options.whepUri
     if (options.controls !== false) this.video.controls = true
