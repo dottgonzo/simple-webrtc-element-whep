@@ -1,177 +1,370 @@
-const linkToIceServers = (links) => links !== null
-    ? links.split(', ').map(link => {
-        const m = link.match(/^<(.+?)>; rel="ice-server"(; username="(.*?)"; credential="(.*?)"; credential-type="password")?/i);
-        if (m === null) {
-            throw new Error('invalid Link header');
-        }
-        const ret = {
-            urls: [m[1]]
-        };
-        if (m[3] !== undefined) {
-            ret.username = JSON.parse(`"${m[3]}"`);
-            ret.credential = JSON.parse(`"${m[4]}"`);
-            ret.credentialType = 'password';
-        }
-        return ret;
-    })
-    : [];
-const parseOffer = (offer) => {
-    const ret = {
-        iceUfrag: '',
-        icePwd: '',
-        medias: []
-    };
-    for (const line of offer.split('\r\n')) {
-        if (line.startsWith('m=')) {
-            ret.medias.push(line.slice('m='.length));
-        }
-        else if (ret.iceUfrag === '' && line.startsWith('a=ice-ufrag:')) {
-            ret.iceUfrag = line.slice('a=ice-ufrag:'.length);
-        }
-        else if (ret.icePwd === '' && line.startsWith('a=ice-pwd:')) {
-            ret.icePwd = line.slice('a=ice-pwd:'.length);
-        }
-    }
-    return ret;
-};
-const generateSdpFragment = (offerData, candidates) => {
-    const candidatesByMedia = {};
-    for (const candidate of candidates) {
-        const mid = candidate.sdpMLineIndex;
-        if (candidatesByMedia[mid] === undefined) {
-            candidatesByMedia[mid] = [];
-        }
-        candidatesByMedia[mid].push(candidate);
-    }
-    let frag = 'a=ice-ufrag:' + offerData.iceUfrag + '\r\n' + 'a=ice-pwd:' + offerData.icePwd + '\r\n';
-    let mid = 0;
-    for (const media of offerData.medias) {
-        if (candidatesByMedia[mid] !== undefined) {
-            frag += 'm=' + media + '\r\n' + 'a=mid:' + mid + '\r\n';
-            for (const candidate of candidatesByMedia[mid]) {
-                frag += 'a=' + candidate.candidate + '\r\n';
-            }
-        }
-        mid++;
-    }
-    return frag;
-};
 export default class WHEPClient {
-    constructor(options) {
-        this.additionalsHeaders = {};
-        this.restartPause = 2000;
+    constructor(video, options) {
+        this.retryPause = 2000;
+        this.nonAdvertisedCodecs = [];
         this.pc = null;
         this.restartTimeout = null;
-        this.eTag = '';
+        this.sessionUrl = '';
         this.queuedCandidates = [];
-        this.offerData = null;
-        if (!options?.videoElement)
-            throw new Error('videoElement is required');
-        if (!options.whepUri)
-            throw new Error('whepUri is required');
-        this.videoElement = options.videoElement;
-        this.whepUri = options.whepUri;
-        this.onOnline = options.onOnline;
-        this.onOffline = options.onOffline;
-        this.start();
-        if (options.additionalsHeaders &&
-            typeof options.additionalsHeaders === 'object' &&
-            Object.keys(options.additionalsHeaders)?.length)
-            this.additionalsHeaders = options.additionalsHeaders;
-    }
-    start() {
-        console.log('requesting ICE servers');
-        fetch(this.whepUri, {
-            method: 'OPTIONS',
-            headers: this.additionalsHeaders
-        })
-            .then(res => this.onIceServers(res))
-            .catch(err => {
-            console.log('error: ' + err);
-            this.scheduleRestart();
-        });
-    }
-    onIceServers(res) {
-        this.pc = new RTCPeerConnection({
-            iceServers: linkToIceServers(res.headers.get('Link'))
-        });
-        const direction = 'sendrecv';
-        this.pc.addTransceiver('video', { direction });
-        this.pc.addTransceiver('audio', { direction });
-        this.pc.onicecandidate = evt => this.onLocalCandidate(evt);
-        this.pc.oniceconnectionstatechange = () => this.onConnectionState();
-        this.pc.ontrack = evt => {
-            console.log('new track:', evt.track.kind);
-            this.videoElement.srcObject = evt.streams[0];
+        this.defaultControls = false;
+        this.online = false;
+        this.unquoteCredential = (v) => JSON.parse(`"${v}"`);
+        this.linkToIceServers = (links) => links !== null
+            ? links.split(', ').map(link => {
+                const m = link.match(/^<(.+?)>; rel="ice-server"(; username="(.*?)"; credential="(.*?)"; credential-type="password")?/i);
+                if (m === null) {
+                    return null;
+                }
+                const ret = {
+                    urls: [m[1]]
+                };
+                if (m[3] !== undefined) {
+                    ret.username = this.unquoteCredential(m[3]);
+                    ret.credential = this.unquoteCredential(m[4]);
+                    ret.credentialType = 'password';
+                }
+                return ret;
+            })
+            : [];
+        this.parseOffer = (sdp) => {
+            const ret = {
+                iceUfrag: '',
+                icePwd: '',
+                medias: []
+            };
+            for (const line of sdp.split('\r\n')) {
+                if (line.startsWith('m=')) {
+                    ret.medias.push(line.slice('m='.length));
+                }
+                else if (ret.iceUfrag === '' && line.startsWith('a=ice-ufrag:')) {
+                    ret.iceUfrag = line.slice('a=ice-ufrag:'.length);
+                }
+                else if (ret.icePwd === '' && line.startsWith('a=ice-pwd:')) {
+                    ret.icePwd = line.slice('a=ice-pwd:'.length);
+                }
+            }
+            return ret;
         };
-        this.pc.createOffer().then(offer => this.onLocalOffer(offer));
+        this.enableStereoPcmau = (section) => {
+            let lines = section.split('\r\n');
+            lines[0] += ' 118';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:118 PCMU/8000/2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:118 transport-cc');
+            lines[0] += ' 119';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:119 PCMA/8000/2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:119 transport-cc');
+            return lines.join('\r\n');
+        };
+        this.enableMultichannelOpus = (section) => {
+            let lines = section.split('\r\n');
+            lines[0] += ' 112';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:112 multiopus/48000/3');
+            lines.splice(lines.length - 1, 0, 'a=fmtp:112 channel_mapping=0,2,1;num_streams=2;coupled_streams=1');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:112 transport-cc');
+            lines[0] += ' 113';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:113 multiopus/48000/4');
+            lines.splice(lines.length - 1, 0, 'a=fmtp:113 channel_mapping=0,1,2,3;num_streams=2;coupled_streams=2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:113 transport-cc');
+            lines[0] += ' 114';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:114 multiopus/48000/5');
+            lines.splice(lines.length - 1, 0, 'a=fmtp:114 channel_mapping=0,4,1,2,3;num_streams=3;coupled_streams=2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:114 transport-cc');
+            lines[0] += ' 115';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:115 multiopus/48000/6');
+            lines.splice(lines.length - 1, 0, 'a=fmtp:115 channel_mapping=0,4,1,2,3,5;num_streams=4;coupled_streams=2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:115 transport-cc');
+            lines[0] += ' 116';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:116 multiopus/48000/7');
+            lines.splice(lines.length - 1, 0, 'a=fmtp:116 channel_mapping=0,4,1,2,3,5,6;num_streams=4;coupled_streams=4');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:116 transport-cc');
+            lines[0] += ' 117';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:117 multiopus/48000/8');
+            lines.splice(lines.length - 1, 0, 'a=fmtp:117 channel_mapping=0,6,1,4,5,2,3,7;num_streams=5;coupled_streams=4');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:117 transport-cc');
+            return lines.join('\r\n');
+        };
+        this.enableL16 = (section) => {
+            let lines = section.split('\r\n');
+            lines[0] += ' 120';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:120 L16/8000/2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:120 transport-cc');
+            lines[0] += ' 121';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:121 L16/16000/2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:121 transport-cc');
+            lines[0] += ' 122';
+            lines.splice(lines.length - 1, 0, 'a=rtpmap:122 L16/48000/2');
+            lines.splice(lines.length - 1, 0, 'a=rtcp-fb:122 transport-cc');
+            return lines.join('\r\n');
+        };
+        this.enableStereoOpus = (section) => {
+            let opusPayloadFormat = '';
+            let lines = section.split('\r\n');
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=rtpmap:') && lines[i].toLowerCase().includes('opus/')) {
+                    opusPayloadFormat = lines[i].slice('a=rtpmap:'.length).split(' ')[0];
+                    break;
+                }
+            }
+            if (opusPayloadFormat === '') {
+                return section;
+            }
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=fmtp:' + opusPayloadFormat + ' ')) {
+                    if (!lines[i].includes('stereo')) {
+                        lines[i] += ';stereo=1';
+                    }
+                    if (!lines[i].includes('sprop-stereo')) {
+                        lines[i] += ';sprop-stereo=1';
+                    }
+                }
+            }
+            return lines.join('\r\n');
+        };
+        this.editOffer = (sdp) => {
+            const sections = sdp.split('m=');
+            for (let i = 0; i < sections.length; i++) {
+                if (sections[i].startsWith('audio')) {
+                    sections[i] = this.enableStereoOpus(sections[i]);
+                    if (this.nonAdvertisedCodecs.includes('pcma/8000/2')) {
+                        sections[i] = this.enableStereoPcmau(sections[i]);
+                    }
+                    if (this.nonAdvertisedCodecs.includes('multiopus/48000/6')) {
+                        sections[i] = this.enableMultichannelOpus(sections[i]);
+                    }
+                    if (this.nonAdvertisedCodecs.includes('L16/48000/2')) {
+                        sections[i] = this.enableL16(sections[i]);
+                    }
+                    break;
+                }
+            }
+            return sections.join('m=');
+        };
+        this.generateSdpFragment = (od, candidates) => {
+            const candidatesByMedia = {};
+            for (const candidate of candidates) {
+                const mid = candidate.sdpMLineIndex;
+                if (candidatesByMedia[mid] === undefined) {
+                    candidatesByMedia[mid] = [];
+                }
+                candidatesByMedia[mid].push(candidate);
+            }
+            let frag = 'a=ice-ufrag:' + od.iceUfrag + '\r\n' + 'a=ice-pwd:' + od.icePwd + '\r\n';
+            let mid = 0;
+            for (const media of od.medias) {
+                if (candidatesByMedia[mid] !== undefined) {
+                    frag += 'm=' + media + '\r\n' + 'a=mid:' + mid + '\r\n';
+                    for (const candidate of candidatesByMedia[mid]) {
+                        frag += 'a=' + candidate.candidate + '\r\n';
+                    }
+                }
+                mid++;
+            }
+            return frag;
+        };
+        this.loadStream = () => {
+            this.requestICEServers();
+        };
+        this.supportsNonAdvertisedCodec = (codec, fmtp) => new Promise((resolve, reject) => {
+            const pc = new RTCPeerConnection({ iceServers: [] });
+            pc.addTransceiver('audio', { direction: 'recvonly' });
+            pc.createOffer()
+                .then(offer => {
+                if (offer.sdp === undefined) {
+                    resolve(false);
+                    return;
+                }
+                if (offer.sdp.includes(' ' + codec)) {
+                    // codec is advertised, there's no need to add it manually
+                    resolve(false);
+                    return;
+                }
+                const sections = offer.sdp.split('m=audio');
+                const lines = sections[1].split('\r\n');
+                lines[0] += ' 118';
+                lines.splice(lines.length - 1, 0, 'a=rtpmap:118 ' + codec);
+                if (fmtp !== undefined) {
+                    lines.splice(lines.length - 1, 0, 'a=fmtp:118 ' + fmtp);
+                }
+                sections[1] = lines.join('\r\n');
+                offer.sdp = sections.join('m=audio');
+                return pc.setLocalDescription(offer);
+            })
+                .then(() => {
+                return pc.setRemoteDescription(new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: 'v=0\r\n' +
+                        'o=- 6539324223450680508 0 IN IP4 0.0.0.0\r\n' +
+                        's=-\r\n' +
+                        't=0 0\r\n' +
+                        'a=fingerprint:sha-256 0D:9F:78:15:42:B5:4B:E6:E2:94:3E:5B:37:78:E1:4B:54:59:A3:36:3A:E5:05:EB:27:EE:8F:D2:2D:41:29:25\r\n' +
+                        'm=audio 9 UDP/TLS/RTP/SAVPF 118\r\n' +
+                        'c=IN IP4 0.0.0.0\r\n' +
+                        'a=ice-pwd:7c3bf4770007e7432ee4ea4d697db675\r\n' +
+                        'a=ice-ufrag:29e036dc\r\n' +
+                        'a=sendonly\r\n' +
+                        'a=rtcp-mux\r\n' +
+                        'a=rtpmap:118 ' +
+                        codec +
+                        '\r\n' +
+                        (fmtp !== undefined ? 'a=fmtp:118 ' + fmtp + '\r\n' : '')
+                }));
+            })
+                .then(() => {
+                resolve(true);
+            })
+                .catch(err => {
+                resolve(false);
+            })
+                .finally(() => {
+                pc.close();
+            });
+        });
+        this.getNonAdvertisedCodecs = () => {
+            Promise.all([
+                ['pcma/8000/2'],
+                ['multiopus/48000/6', 'channel_mapping=0,4,1,2,3,5;num_streams=4;coupled_streams=2'],
+                ['L16/48000/2']
+            ].map(c => this.supportsNonAdvertisedCodec(c[0], c[1]).then(r => (r ? c[0] : false))))
+                .then(c => c.filter(e => e !== false))
+                .then(codecs => {
+                this.nonAdvertisedCodecs = codecs;
+                this.loadStream();
+            });
+        };
+        this.onError = (err) => {
+            console.error('whep stream error', err);
+            this.onOffline();
+            this.online = false;
+            if (this.restartTimeout === null) {
+                if (this.pc !== null) {
+                    this.pc.close();
+                    this.pc = null;
+                }
+                this.restartTimeout = window.setTimeout(() => {
+                    this.restartTimeout = null;
+                    this.loadStream();
+                }, this.retryPause);
+                if (this.sessionUrl) {
+                    fetch(this.sessionUrl, {
+                        method: 'DELETE'
+                    });
+                }
+                this.sessionUrl = '';
+                this.queuedCandidates = [];
+            }
+        };
+        this.createOffer = () => {
+            if (this.pc) {
+                this.pc
+                    .createOffer()
+                    .then(offer => {
+                    offer.sdp = this.editOffer(offer.sdp);
+                    this.offerData = this.parseOffer(offer.sdp);
+                    if (this.pc)
+                        this.pc
+                            .setLocalDescription(offer)
+                            .then(() => {
+                            this.sendOffer(offer);
+                        })
+                            .catch(err => {
+                            this.onError(err.toString());
+                        });
+                })
+                    .catch(err => {
+                    this.onError(err.toString());
+                });
+            }
+        };
+        this.onConnectionState = () => {
+            if (this.restartTimeout !== null) {
+                return;
+            }
+            if (this.pc?.iceConnectionState === 'disconnected') {
+                this.onError(new Error('peer connection closed'));
+            }
+        };
+        this.onTrack = (evt) => {
+            this.video.srcObject = evt.streams[0];
+            this.onOnline();
+            this.online = true;
+        };
+        this.requestICEServers = () => {
+            fetch(new URL('whep', window.location.href) + window.location.search, {
+                method: 'OPTIONS'
+            })
+                .then(res => {
+                this.pc = new RTCPeerConnection({
+                    iceServers: this.linkToIceServers(res.headers.get('Link')),
+                    // https://webrtc.org/getting-started/unified-plan-transition-guide
+                    // @ts-ignore
+                    sdpSemantics: 'unified-plan'
+                });
+                const direction = 'sendrecv';
+                this.pc.addTransceiver('video', { direction });
+                this.pc.addTransceiver('audio', { direction });
+                this.pc.onicecandidate = evt => this.onLocalCandidate(evt);
+                this.pc.oniceconnectionstatechange = () => this.onConnectionState();
+                this.pc.ontrack = evt => this.onTrack(evt);
+                this.createOffer();
+            })
+                .catch(err => {
+                this.onError(err.toString());
+            });
+        };
+        this.init = () => {
+            this.getNonAdvertisedCodecs();
+        };
+        this.video = video;
+        if (options.controls !== false)
+            this.video.controls = true;
+        if (options.muted !== false)
+            this.video.muted = true;
+        if (options.autoplay !== true)
+            this.video.autoplay = true;
+        if (options.playsInline !== true)
+            this.video.playsInline = true;
+        this.defaultControls = this.video.controls;
+        this.onOnline =
+            options.onOnline ||
+                (() => {
+                    console.log('online');
+                });
+        this.onOffline =
+            options.onOffline ||
+                (() => {
+                    console.log('offline');
+                });
+        this.init();
     }
-    onLocalOffer(offer) {
-        if (!this.pc)
-            throw new Error('pc is null');
-        if (!offer.sdp)
-            throw new Error('offer.sdp is null');
-        this.offerData = parseOffer(offer.sdp);
-        this.pc.setLocalDescription(offer);
-        console.log('sending offer');
-        fetch(this.whepUri, {
-            method: 'POST',
-            headers: Object.assign(this.additionalsHeaders, {
-                'Content-Type': 'application/sdp'
-            }),
-            body: offer.sdp
+    sendLocalCandidates(candidates) {
+        fetch(this.sessionUrl + window.location.search, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/trickle-ice-sdpfrag',
+                'If-Match': '*'
+            },
+            body: this.generateSdpFragment(this.offerData, candidates)
         })
             .then(res => {
-            if (res.status !== 201) {
-                throw new Error('bad status code');
+            switch (res.status) {
+                case 204:
+                    break;
+                case 404:
+                    throw new Error('stream not found');
+                default:
+                    throw new Error(`bad status code ${res.status}`);
             }
-            this.eTag = res.headers.get('E-Tag') || '';
-            return res.text();
         })
-            .then(sdp => this.onRemoteAnswer(new RTCSessionDescription({
-            type: 'answer',
-            sdp
-        })))
             .catch(err => {
-            console.log('error: ' + err);
-            this.scheduleRestart();
+            this.onError(err.toString());
         });
-    }
-    onConnectionState() {
-        if (this.restartTimeout !== null) {
-            return;
-        }
-        if (!this.pc)
-            throw new Error('pc is null');
-        console.log('peer connection state:', this.pc.iceConnectionState);
-        switch (this.pc.iceConnectionState) {
-            case 'disconnected':
-                this.onOffline();
-                this.scheduleRestart();
-                break;
-            case 'connected':
-                this.onOnline();
-                break;
-        }
-    }
-    onRemoteAnswer(answer) {
-        if (this.restartTimeout !== null) {
-            return;
-        }
-        if (!this.pc)
-            throw new Error('pc is null');
-        this.pc.setRemoteDescription(new RTCSessionDescription(answer));
-        if (this.queuedCandidates.length !== 0) {
-            this.sendLocalCandidates(this.queuedCandidates);
-            this.queuedCandidates = [];
-        }
     }
     onLocalCandidate(evt) {
         if (this.restartTimeout !== null) {
             return;
         }
         if (evt.candidate !== null) {
-            if (this.eTag === '') {
+            if (this.sessionUrl === '') {
                 this.queuedCandidates.push(evt.candidate);
             }
             else {
@@ -179,41 +372,55 @@ export default class WHEPClient {
             }
         }
     }
-    sendLocalCandidates(candidates) {
-        if (!this.offerData)
-            throw new Error('offerData is null');
-        fetch(this.whepUri, {
-            method: 'PATCH',
-            headers: Object.assign(this.additionalsHeaders, {
-                'Content-Type': 'application/trickle-ice-sdpfrag',
-                'If-Match': this.eTag || ''
-            }),
-            body: generateSdpFragment(this.offerData, candidates)
-        })
-            .then(res => {
-            if (res.status !== 204) {
-                throw new Error('bad status code');
+    onRemoteAnswer(sdp) {
+        if (this.restartTimeout !== null || this.pc === null) {
+            return;
+        }
+        this.pc
+            .setRemoteDescription(new RTCSessionDescription({
+            type: 'answer',
+            sdp
+        }))
+            .then(() => {
+            if (this.queuedCandidates.length !== 0) {
+                this.sendLocalCandidates(this.queuedCandidates);
+                this.queuedCandidates = [];
             }
         })
             .catch(err => {
-            console.log('error: ' + err);
-            this.scheduleRestart();
+            this.onError(err.toString());
         });
     }
-    scheduleRestart() {
-        if (this.restartTimeout !== null) {
-            return;
-        }
-        if (this.pc !== null) {
-            this.pc.close();
-            this.pc = null;
-        }
-        this.restartTimeout = setTimeout(() => {
-            this.restartTimeout = null;
-            this.start();
-        }, this.restartPause);
-        this.eTag = '';
-        this.queuedCandidates = [];
+    sendOffer(offer) {
+        fetch(new URL('whep', window.location.href) + window.location.search, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/sdp'
+            },
+            body: offer.sdp
+        })
+            .then(res => {
+            switch (res.status) {
+                case 201:
+                    break;
+                case 404:
+                    throw new Error('stream not found');
+                case 400:
+                    return res.json().then(e => {
+                        throw new Error(e.error);
+                    });
+                default:
+                    throw new Error(`bad status code ${res.status}`);
+            }
+            const loc = res.headers.get('location');
+            if (loc) {
+                this.sessionUrl = new URL(loc, window.location.href).toString();
+            }
+            return res.text().then(sdp => this.onRemoteAnswer(sdp));
+        })
+            .catch(err => {
+            this.onError(err.toString());
+        });
     }
 }
 //# sourceMappingURL=index.js.map
