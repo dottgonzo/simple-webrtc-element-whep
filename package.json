@@ -1,6 +1,6 @@
 {
   "name": "simple-webrtc-element-whep",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Simple Webrtc Html Video Element Manager",
   "main": "index.js",
   "scripts": {
