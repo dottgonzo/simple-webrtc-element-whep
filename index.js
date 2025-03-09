@@ -421,5 +421,14 @@ export default class WHEPClient {
             this.onError(err.toString());
         });
     }
+    close() {
+        this.pc ? this.pc.close() : null;
+        this.pc = null;
+        if (this.sessionUrl) {
+            fetch(this.sessionUrl, {
+                method: 'DELETE'
+            });
+        }
+    }
 }
 //# sourceMappingURL=index.js.map

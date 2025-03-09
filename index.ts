@@ -526,4 +526,13 @@ export default class WHEPClient {
   init = () => {
     this.getNonAdvertisedCodecs()
   }
+  close() {
+    this.pc ? this.pc.close() : null
+    this.pc = null
+    if (this.sessionUrl) {
+      fetch(this.sessionUrl, {
+        method: 'DELETE'
+      })
+    }
+  }
 }
